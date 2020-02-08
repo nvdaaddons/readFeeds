@@ -1,5 +1,6 @@
-"""\
-minidom.py -- a lightweight DOM implementation.
+"""Simple implementation of the Level 1 DOM.
+
+Namespaces and other minor Level 2 features are also supported.
 
 parse("foo.xml")
 
@@ -14,22 +15,23 @@ Todo:
  * SAX 2 namespaces
 """
 
-import xml2.dom
+import io
+import xml.dom
 
-from xml2.dom import EMPTY_NAMESPACE, EMPTY_PREFIX, XMLNS_NAMESPACE, domreg
-from xml2.dom.minicompat import *
-from xml2.dom.xmlbuilder import DOMImplementationLS, DocumentLS
+from xml.dom import EMPTY_NAMESPACE, EMPTY_PREFIX, XMLNS_NAMESPACE, domreg
+from xml.dom.minicompat import *
+from xml.dom.xmlbuilder import DOMImplementationLS, DocumentLS
 
 # This is used by the ID-cache invalidation checks; the list isn't
 # actually complete, since the nodes being checked will never be the
 # DOCUMENT_NODE or DOCUMENT_FRAGMENT_NODE.  (The node being checked is
 # the node being added or removed, not the node being modified.)
 #
-_nodeTypes_with_children = (xml2.dom.Node.ELEMENT_NODE,
-                            xml2.dom.Node.ENTITY_REFERENCE_NODE)
+_nodeTypes_with_children = (xml.dom.Node.ELEMENT_NODE,
+                            xml.dom.Node.ENTITY_REFERENCE_NODE)
 
 
-class Node(xml2.dom.Node):
+class Node(xml.dom.Node):
     namespaceURI = None # this is non-null only for elements and attributes
     parentNode = None
     ownerDocument = None
@@ -38,32 +40,32 @@ class Node(xml2.dom.Node):
 
     prefix = EMPTY_PREFIX # non-null only for NS elements and attributes
 
-    def __nonzero__(self):
+    def __bool__(self):
         return True
 
-    def toxml(self, encoding = None):
+    def toxml(self, encoding=None):
         return self.toprettyxml("", "", encoding)
 
-    def toprettyxml(self, indent="\t", newl="\n", encoding = None):
-        # indent = the indentation string to prepend, per level
-        # newl = the newline string to append
-        writer = _get_StringIO()
-        if encoding is not None:
-            import codecs
-            # Can't use codecs.getwriter to preserve 2.0 compatibility
-            writer = codecs.lookup(encoding)[3](writer)
+    def toprettyxml(self, indent="\t", newl="\n", encoding=None):
+        if encoding is None:
+            writer = io.StringIO()
+        else:
+            writer = io.TextIOWrapper(io.BytesIO(),
+                                      encoding=encoding,
+                                      errors="xmlcharrefreplace",
+                                      newline='\n')
         if self.nodeType == Node.DOCUMENT_NODE:
             # Can pass encoding only to document, to put it into XML header
             self.writexml(writer, "", indent, newl, encoding)
         else:
             self.writexml(writer, "", indent, newl)
-        return writer.getvalue()
+        if encoding is None:
+            return writer.getvalue()
+        else:
+            return writer.detach().getvalue()
 
     def hasChildNodes(self):
-        if self.childNodes:
-            return True
-        else:
-            return False
+        return bool(self.childNodes)
 
     def _get_childNodes(self):
         return self.childNodes
@@ -83,7 +85,7 @@ class Node(xml2.dom.Node):
             ### The DOM does not clearly specify what to return in this case
             return newChild
         if newChild.nodeType not in self._child_node_types:
-            raise xml2dom.HierarchyRequestErr(
+            raise xml.dom.HierarchyRequestErr(
                 "%s cannot be child of %s" % (repr(newChild), repr(self)))
         if newChild.parentNode is not None:
             newChild.parentNode.removeChild(newChild)
@@ -93,7 +95,7 @@ class Node(xml2.dom.Node):
             try:
                 index = self.childNodes.index(refChild)
             except ValueError:
-                raise xml2dom.NotFoundErr()
+                raise xml.dom.NotFoundErr()
             if newChild.nodeType in _nodeTypes_with_children:
                 _clear_id_cache(self)
             self.childNodes.insert(index, newChild)
@@ -115,7 +117,7 @@ class Node(xml2.dom.Node):
             ### The DOM does not clearly specify what to return in this case
             return node
         if node.nodeType not in self._child_node_types:
-            raise xml2dom.HierarchyRequestErr(
+            raise xml.dom.HierarchyRequestErr(
                 "%s cannot be child of %s" % (repr(node), repr(self)))
         elif node.nodeType in _nodeTypes_with_children:
             _clear_id_cache(self)
@@ -131,7 +133,7 @@ class Node(xml2.dom.Node):
             self.removeChild(oldChild)
             return self.insertBefore(newChild, refChild)
         if newChild.nodeType not in self._child_node_types:
-            raise xml2dom.HierarchyRequestErr(
+            raise xml.dom.HierarchyRequestErr(
                 "%s cannot be child of %s" % (repr(newChild), repr(self)))
         if newChild is oldChild:
             return
@@ -140,7 +142,7 @@ class Node(xml2.dom.Node):
         try:
             index = self.childNodes.index(oldChild)
         except ValueError:
-            raise xml2dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         self.childNodes[index] = newChild
         newChild.parentNode = self
         oldChild.parentNode = None
@@ -161,7 +163,7 @@ class Node(xml2.dom.Node):
         try:
             self.childNodes.remove(oldChild)
         except ValueError:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         if oldChild.nextSibling is not None:
             oldChild.nextSibling.previousSibling = oldChild.previousSibling
         if oldChild.previousSibling is not None:
@@ -251,7 +253,7 @@ class Node(xml2.dom.Node):
 
     def _call_user_data_handler(self, operation, src, dst):
         if hasattr(self, "_user_data"):
-            for key, (data, handler) in self._user_data.items():
+            for key, (data, handler) in list(self._user_data.items()):
                 if handler is not None:
                     handler.handle(operation, key, data, src, dst)
 
@@ -266,6 +268,14 @@ class Node(xml2.dom.Node):
         self.previousSibling = None
         self.nextSibling = None
 
+    # A Node is its own context manager, to ensure that an unlink() call occurs.
+    # This is similar to how a file object works.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, et, ev, tb):
+        self.unlink()
+
 defproperty(Node, "firstChild", doc="First child node, or None.")
 defproperty(Node, "lastChild",  doc="Last child node, or None.")
 defproperty(Node, "localName",  doc="Namespace-local name of this node.")
@@ -276,10 +286,10 @@ def _append_child(self, node):
     childNodes = self.childNodes
     if childNodes:
         last = childNodes[-1]
-        node.__dict__["previousSibling"] = last
-        last.__dict__["nextSibling"] = node
+        node.previousSibling = last
+        last.nextSibling = node
     childNodes.append(node)
-    node.__dict__["parentNode"] = self
+    node.parentNode = self
 
 def _in_document(node):
     # return True iff node is part of a document tree
@@ -332,9 +342,10 @@ class DocumentFragment(Node):
 
 
 class Attr(Node):
+    __slots__=('_name', '_value', 'namespaceURI',
+               '_prefix', 'childNodes', '_localName', 'ownerDocument', 'ownerElement')
     nodeType = Node.ATTRIBUTE_NODE
     attributes = None
-    ownerElement = None
     specified = False
     _is_id = False
 
@@ -342,12 +353,11 @@ class Attr(Node):
 
     def __init__(self, qName, namespaceURI=EMPTY_NAMESPACE, localName=None,
                  prefix=None):
-        # skip setattr for performance
-        d = self.__dict__
-        d["nodeName"] = d["name"] = qName
-        d["namespaceURI"] = namespaceURI
-        d["prefix"] = prefix
-        d['childNodes'] = NodeList()
+        self.ownerElement = None
+        self._name = qName
+        self.namespaceURI = namespaceURI
+        self._prefix = prefix
+        self.childNodes = NodeList()
 
         # Add the single child node that represents the value of the attr
         self.childNodes.append(Text())
@@ -355,51 +365,55 @@ class Attr(Node):
         # nodeValue and value are set elsewhere
 
     def _get_localName(self):
-        return self.nodeName.split(":", 1)[-1]
-
-    def _get_name(self):
-        return self.name
+        try:
+            return self._localName
+        except AttributeError:
+            return self.nodeName.split(":", 1)[-1]
 
     def _get_specified(self):
         return self.specified
 
-    def __setattr__(self, name, value):
-        d = self.__dict__
-        if name in ("value", "nodeValue"):
-            d["value"] = d["nodeValue"] = value
-            d2 = self.childNodes[0].__dict__
-            d2["data"] = d2["nodeValue"] = value
-            if self.ownerElement is not None:
-                _clear_id_cache(self.ownerElement)
-        elif name in ("name", "nodeName"):
-            d["name"] = d["nodeName"] = value
-            if self.ownerElement is not None:
-                _clear_id_cache(self.ownerElement)
-        else:
-            d[name] = value
+    def _get_name(self):
+        return self._name
+
+    def _set_name(self, value):
+        self._name = value
+        if self.ownerElement is not None:
+            _clear_id_cache(self.ownerElement)
+
+    nodeName = name = property(_get_name, _set_name)
+
+    def _get_value(self):
+        return self._value
+
+    def _set_value(self, value):
+        self._value = value
+        self.childNodes[0].data = value
+        if self.ownerElement is not None:
+            _clear_id_cache(self.ownerElement)
+        self.childNodes[0].data = value
+
+    nodeValue = value = property(_get_value, _set_value)
+
+    def _get_prefix(self):
+        return self._prefix
 
     def _set_prefix(self, prefix):
         nsuri = self.namespaceURI
         if prefix == "xmlns":
             if nsuri and nsuri != XMLNS_NAMESPACE:
-                raise xml2.dom.NamespaceErr(
+                raise xml.dom.NamespaceErr(
                     "illegal use of 'xmlns' prefix for the wrong namespace")
-        d = self.__dict__
-        d['prefix'] = prefix
+        self._prefix = prefix
         if prefix is None:
             newName = self.localName
         else:
             newName = "%s:%s" % (prefix, self.localName)
         if self.ownerElement:
             _clear_id_cache(self.ownerElement)
-        d['nodeName'] = d['name'] = newName
+        self.name = newName
 
-    def _set_value(self, value):
-        d = self.__dict__
-        d['value'] = d['nodeValue'] = value
-        if self.ownerElement:
-            _clear_id_cache(self.ownerElement)
-        self.childNodes[0].data = value
+    prefix = property(_get_prefix, _set_prefix)
 
     def unlink(self):
         # This implementation does not call the base implementation
@@ -474,7 +488,7 @@ class NamedNodeMap(object):
 
     def item(self, index):
         try:
-            return self[self._attrs.keys()[index]]
+            return self[list(self._attrs.keys())[index]]
         except IndexError:
             return None
 
@@ -490,8 +504,8 @@ class NamedNodeMap(object):
             L.append(((node.namespaceURI, node.localName), node.value))
         return L
 
-    def has_key(self, key):
-        if isinstance(key, StringTypes):
+    def __contains__(self, key):
+        if isinstance(key, str):
             return key in self._attrs
         else:
             return key in self._attrsNS
@@ -510,12 +524,26 @@ class NamedNodeMap(object):
 
     __len__ = _get_length
 
-    __hash__ = None # Mutable type can't be correctly hashed
-    def __cmp__(self, other):
+    def _cmp(self, other):
         if self._attrs is getattr(other, "_attrs", None):
             return 0
         else:
-            return cmp(id(self), id(other))
+            return (id(self) > id(other)) - (id(self) < id(other))
+
+    def __eq__(self, other):
+        return self._cmp(other) == 0
+
+    def __ge__(self, other):
+        return self._cmp(other) >= 0
+
+    def __gt__(self, other):
+        return self._cmp(other) > 0
+
+    def __le__(self, other):
+        return self._cmp(other) <= 0
+
+    def __lt__(self, other):
+        return self._cmp(other) < 0
 
     def __getitem__(self, attname_or_tuple):
         if isinstance(attname_or_tuple, tuple):
@@ -525,7 +553,7 @@ class NamedNodeMap(object):
 
     # same as set
     def __setitem__(self, attname, value):
-        if isinstance(value, StringTypes):
+        if isinstance(value, str):
             try:
                 node = self._attrs[attname]
             except KeyError:
@@ -535,7 +563,7 @@ class NamedNodeMap(object):
             node.value = value
         else:
             if not isinstance(value, Attr):
-                raise TypeError, "value must be a string or Attr object"
+                raise TypeError("value must be a string or Attr object")
             node = value
             self.setNamedItem(node)
 
@@ -557,11 +585,11 @@ class NamedNodeMap(object):
             _clear_id_cache(self._ownerElement)
             del self._attrs[n.nodeName]
             del self._attrsNS[(n.namespaceURI, n.localName)]
-            if 'ownerElement' in n.__dict__:
-                n.__dict__['ownerElement'] = None
+            if hasattr(n, 'ownerElement'):
+                n.ownerElement = None
             return n
         else:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
 
     def removeNamedItemNS(self, namespaceURI, localName):
         n = self.getNamedItemNS(namespaceURI, localName)
@@ -569,15 +597,15 @@ class NamedNodeMap(object):
             _clear_id_cache(self._ownerElement)
             del self._attrsNS[(n.namespaceURI, n.localName)]
             del self._attrs[n.nodeName]
-            if 'ownerElement' in n.__dict__:
-                n.__dict__['ownerElement'] = None
+            if hasattr(n, 'ownerElement'):
+                n.ownerElement = None
             return n
         else:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
 
     def setNamedItem(self, node):
         if not isinstance(node, Attr):
-            raise xml2.dom.HierarchyRequestErr(
+            raise xml.dom.HierarchyRequestErr(
                 "%s cannot be child of %s" % (repr(node), repr(self)))
         old = self._attrs.get(node.name)
         if old:
@@ -617,9 +645,10 @@ class TypeInfo(object):
 
     def __repr__(self):
         if self.namespace:
-            return "<TypeInfo %r (from %r)>" % (self.name, self.namespace)
+            return "<%s %r (from %r)>" % (self.__class__.__name__, self.name,
+                                          self.namespace)
         else:
-            return "<TypeInfo %r>" % self.name
+            return "<%s %r>" % (self.__class__.__name__, self.name)
 
     def _get_name(self):
         return self.name
@@ -630,6 +659,9 @@ class TypeInfo(object):
 _no_type = TypeInfo(None, None)
 
 class Element(Node):
+    __slots__=('ownerDocument', 'parentNode', 'tagName', 'nodeName', 'prefix',
+               'namespaceURI', '_localName', 'childNodes', '_attrs', '_attrsNS',
+               'nextSibling', 'previousSibling')
     nodeType = Node.ELEMENT_NODE
     nodeValue = None
     schemaType = _no_type
@@ -645,39 +677,57 @@ class Element(Node):
 
     def __init__(self, tagName, namespaceURI=EMPTY_NAMESPACE, prefix=None,
                  localName=None):
+        self.parentNode = None
         self.tagName = self.nodeName = tagName
         self.prefix = prefix
         self.namespaceURI = namespaceURI
         self.childNodes = NodeList()
+        self.nextSibling = self.previousSibling = None
 
-        self._attrs = {}   # attributes are double-indexed:
-        self._attrsNS = {} #    tagName -> Attribute
-                           #    URI,localName -> Attribute
-                           # in the future: consider lazy generation
-                           # of attribute objects this is too tricky
-                           # for now because of headaches with
-                           # namespaces.
+        # Attribute dictionaries are lazily created
+        # attributes are double-indexed:
+        #    tagName -> Attribute
+        #    URI,localName -> Attribute
+        # in the future: consider lazy generation
+        # of attribute objects this is too tricky
+        # for now because of headaches with
+        # namespaces.
+        self._attrs = None
+        self._attrsNS = None
+
+    def _ensure_attributes(self):
+        if self._attrs is None:
+            self._attrs = {}
+            self._attrsNS = {}
 
     def _get_localName(self):
-        return self.tagName.split(":", 1)[-1]
+        try:
+            return self._localName
+        except AttributeError:
+            return self.tagName.split(":", 1)[-1]
 
     def _get_tagName(self):
         return self.tagName
 
     def unlink(self):
-        for attr in self._attrs.values():
-            attr.unlink()
+        if self._attrs is not None:
+            for attr in list(self._attrs.values()):
+                attr.unlink()
         self._attrs = None
         self._attrsNS = None
         Node.unlink(self)
 
     def getAttribute(self, attname):
+        if self._attrs is None:
+            return ""
         try:
             return self._attrs[attname].value
         except KeyError:
             return ""
 
     def getAttributeNS(self, namespaceURI, localName):
+        if self._attrsNS is None:
+            return ""
         try:
             return self._attrsNS[(namespaceURI, localName)].value
         except KeyError:
@@ -687,14 +737,11 @@ class Element(Node):
         attr = self.getAttributeNode(attname)
         if attr is None:
             attr = Attr(attname)
-            # for performance
-            d = attr.__dict__
-            d["value"] = d["nodeValue"] = value
-            d["ownerDocument"] = self.ownerDocument
+            attr.value = value # also sets nodeValue
+            attr.ownerDocument = self.ownerDocument
             self.setAttributeNode(attr)
         elif value != attr.value:
-            d = attr.__dict__
-            d["value"] = d["nodeValue"] = value
+            attr.value = value
             if attr.isId:
                 _clear_id_cache(self)
 
@@ -702,33 +749,33 @@ class Element(Node):
         prefix, localname = _nssplit(qualifiedName)
         attr = self.getAttributeNodeNS(namespaceURI, localname)
         if attr is None:
-            # for performance
             attr = Attr(qualifiedName, namespaceURI, localname, prefix)
-            d = attr.__dict__
-            d["prefix"] = prefix
-            d["nodeName"] = qualifiedName
-            d["value"] = d["nodeValue"] = value
-            d["ownerDocument"] = self.ownerDocument
+            attr.value = value
+            attr.ownerDocument = self.ownerDocument
             self.setAttributeNode(attr)
         else:
-            d = attr.__dict__
             if value != attr.value:
-                d["value"] = d["nodeValue"] = value
+                attr.value = value
                 if attr.isId:
                     _clear_id_cache(self)
             if attr.prefix != prefix:
-                d["prefix"] = prefix
-                d["nodeName"] = qualifiedName
+                attr.prefix = prefix
+                attr.nodeName = qualifiedName
 
     def getAttributeNode(self, attrname):
+        if self._attrs is None:
+            return None
         return self._attrs.get(attrname)
 
     def getAttributeNodeNS(self, namespaceURI, localName):
+        if self._attrsNS is None:
+            return None
         return self._attrsNS.get((namespaceURI, localName))
 
     def setAttributeNode(self, attr):
         if attr.ownerElement not in (None, self):
-            raise xml2.dom.InuseAttributeErr("attribute node already owned")
+            raise xml.dom.InuseAttributeErr("attribute node already owned")
+        self._ensure_attributes()
         old1 = self._attrs.get(attr.name, None)
         if old1 is not None:
             self.removeAttributeNode(old1)
@@ -747,26 +794,30 @@ class Element(Node):
     setAttributeNodeNS = setAttributeNode
 
     def removeAttribute(self, name):
+        if self._attrsNS is None:
+            raise xml.dom.NotFoundErr()
         try:
             attr = self._attrs[name]
         except KeyError:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         self.removeAttributeNode(attr)
 
     def removeAttributeNS(self, namespaceURI, localName):
+        if self._attrsNS is None:
+            raise xml.dom.NotFoundErr()
         try:
             attr = self._attrsNS[(namespaceURI, localName)]
         except KeyError:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         self.removeAttributeNode(attr)
 
     def removeAttributeNode(self, node):
         if node is None:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         try:
             self._attrs[node.name]
         except KeyError:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         _clear_id_cache(self)
         node.unlink()
         # Restore this since the node is still useful and otherwise
@@ -776,9 +827,13 @@ class Element(Node):
     removeAttributeNodeNS = removeAttributeNode
 
     def hasAttribute(self, name):
+        if self._attrs is None:
+            return False
         return name in self._attrs
 
     def hasAttributeNS(self, namespaceURI, localName):
+        if self._attrsNS is None:
+            return False
         return (namespaceURI, localName) in self._attrsNS
 
     def getElementsByTagName(self, name):
@@ -798,22 +853,28 @@ class Element(Node):
         writer.write(indent+"<" + self.tagName)
 
         attrs = self._get_attributes()
-        a_names = attrs.keys()
-        a_names.sort()
+        a_names = sorted(attrs.keys())
 
         for a_name in a_names:
             writer.write(" %s=\"" % a_name)
             _write_data(writer, attrs[a_name].value)
             writer.write("\"")
         if self.childNodes:
-            writer.write(">%s"%(newl))
-            for node in self.childNodes:
-                node.writexml(writer,indent+addindent,addindent,newl)
-            writer.write("%s</%s>%s" % (indent,self.tagName,newl))
+            writer.write(">")
+            if (len(self.childNodes) == 1 and
+                self.childNodes[0].nodeType == Node.TEXT_NODE):
+                self.childNodes[0].writexml(writer, '', '', '')
+            else:
+                writer.write(newl)
+                for node in self.childNodes:
+                    node.writexml(writer, indent+addindent, addindent, newl)
+                writer.write(indent)
+            writer.write("</%s>%s" % (self.tagName, newl))
         else:
             writer.write("/>%s"%(newl))
 
     def _get_attributes(self):
+        self._ensure_attributes()
         return NamedNodeMap(self._attrs, self._attrsNS, self)
 
     def hasAttributes(self):
@@ -834,11 +895,11 @@ class Element(Node):
 
     def setIdAttributeNode(self, idAttr):
         if idAttr is None or not self.isSameNode(idAttr.ownerElement):
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         if _get_containing_entref(self) is not None:
-            raise xml2.dom.NoModificationAllowedErr()
+            raise xml.dom.NoModificationAllowedErr()
         if not idAttr._is_id:
-            idAttr.__dict__['_is_id'] = True
+            idAttr._is_id = True
             self._magic_id_nodes += 1
             self.ownerDocument._magic_id_count += 1
             _clear_id_cache(self)
@@ -851,19 +912,20 @@ defproperty(Element, "localName",
 
 def _set_attribute_node(element, attr):
     _clear_id_cache(element)
+    element._ensure_attributes()
     element._attrs[attr.name] = attr
     element._attrsNS[(attr.namespaceURI, attr.localName)] = attr
 
     # This creates a circular reference, but Element.unlink()
     # breaks the cycle since the references to the attribute
     # dictionaries are tossed.
-    attr.__dict__['ownerElement'] = element
-
+    attr.ownerElement = element
 
 class Childless:
     """Mixin that makes childless-ness easy to implement and avoids
     the complexity of the Node methods that deal with children.
     """
+    __slots__ = ()
 
     attributes = None
     childNodes = EmptyNodeList()
@@ -877,18 +939,18 @@ class Childless:
         return None
 
     def appendChild(self, node):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             self.nodeName + " nodes cannot have children")
 
     def hasChildNodes(self):
         return False
 
     def insertBefore(self, newChild, refChild):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             self.nodeName + " nodes do not have children")
 
     def removeChild(self, oldChild):
-        raise xml2.dom.NotFoundErr(
+        raise xml.dom.NotFoundErr(
             self.nodeName + " nodes do not have children")
 
     def normalize(self):
@@ -896,60 +958,55 @@ class Childless:
         pass
 
     def replaceChild(self, newChild, oldChild):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             self.nodeName + " nodes do not have children")
 
 
 class ProcessingInstruction(Childless, Node):
     nodeType = Node.PROCESSING_INSTRUCTION_NODE
+    __slots__ = ('target', 'data')
 
     def __init__(self, target, data):
-        self.target = self.nodeName = target
-        self.data = self.nodeValue = data
+        self.target = target
+        self.data = data
 
-    def _get_data(self):
+    # nodeValue is an alias for data
+    def _get_nodeValue(self):
         return self.data
-    def _set_data(self, value):
-        d = self.__dict__
-        d['data'] = d['nodeValue'] = value
+    def _set_nodeValue(self, value):
+        self.data = value
+    nodeValue = property(_get_nodeValue, _set_nodeValue)
 
-    def _get_target(self):
+    # nodeName is an alias for target
+    def _get_nodeName(self):
         return self.target
-    def _set_target(self, value):
-        d = self.__dict__
-        d['target'] = d['nodeName'] = value
-
-    def __setattr__(self, name, value):
-        if name == "data" or name == "nodeValue":
-            self.__dict__['data'] = self.__dict__['nodeValue'] = value
-        elif name == "target" or name == "nodeName":
-            self.__dict__['target'] = self.__dict__['nodeName'] = value
-        else:
-            self.__dict__[name] = value
+    def _set_nodeName(self, value):
+        self.target = value
+    nodeName = property(_get_nodeName, _set_nodeName)
 
     def writexml(self, writer, indent="", addindent="", newl=""):
         writer.write("%s<?%s %s?>%s" % (indent,self.target, self.data, newl))
 
 
 class CharacterData(Childless, Node):
+    __slots__=('_data', 'ownerDocument','parentNode', 'previousSibling', 'nextSibling')
+
+    def __init__(self):
+        self.ownerDocument = self.parentNode = None
+        self.previousSibling = self.nextSibling = None
+        self._data = ''
+        Node.__init__(self)
+
     def _get_length(self):
         return len(self.data)
     __len__ = _get_length
 
     def _get_data(self):
-        return self.__dict__['data']
+        return self._data
     def _set_data(self, data):
-        d = self.__dict__
-        d['data'] = d['nodeValue'] = data
+        self._data = data
 
-    _get_nodeValue = _get_data
-    _set_nodeValue = _set_data
-
-    def __setattr__(self, name, value):
-        if name == "data" or name == "nodeValue":
-            self.__dict__['data'] = self.__dict__['nodeValue'] = value
-        else:
-            self.__dict__[name] = value
+    data = nodeValue = property(_get_data, _set_data)
 
     def __repr__(self):
         data = self.data
@@ -962,11 +1019,11 @@ class CharacterData(Childless, Node):
 
     def substringData(self, offset, count):
         if offset < 0:
-            raise xml2.dom.IndexSizeErr("offset cannot be negative")
+            raise xml.dom.IndexSizeErr("offset cannot be negative")
         if offset >= len(self.data):
-            raise xml2.dom.IndexSizeErr("offset cannot be beyond end of data")
+            raise xml.dom.IndexSizeErr("offset cannot be beyond end of data")
         if count < 0:
-            raise xml2.dom.IndexSizeErr("count cannot be negative")
+            raise xml.dom.IndexSizeErr("count cannot be negative")
         return self.data[offset:offset+count]
 
     def appendData(self, arg):
@@ -974,30 +1031,30 @@ class CharacterData(Childless, Node):
 
     def insertData(self, offset, arg):
         if offset < 0:
-            raise xml2.dom.IndexSizeErr("offset cannot be negative")
+            raise xml.dom.IndexSizeErr("offset cannot be negative")
         if offset >= len(self.data):
-            raise xml2.dom.IndexSizeErr("offset cannot be beyond end of data")
+            raise xml.dom.IndexSizeErr("offset cannot be beyond end of data")
         if arg:
             self.data = "%s%s%s" % (
                 self.data[:offset], arg, self.data[offset:])
 
     def deleteData(self, offset, count):
         if offset < 0:
-            raise xml2.dom.IndexSizeErr("offset cannot be negative")
+            raise xml.dom.IndexSizeErr("offset cannot be negative")
         if offset >= len(self.data):
-            raise xml2.dom.IndexSizeErr("offset cannot be beyond end of data")
+            raise xml.dom.IndexSizeErr("offset cannot be beyond end of data")
         if count < 0:
-            raise xml2.dom.IndexSizeErr("count cannot be negative")
+            raise xml.dom.IndexSizeErr("count cannot be negative")
         if count:
             self.data = self.data[:offset] + self.data[offset+count:]
 
     def replaceData(self, offset, count, arg):
         if offset < 0:
-            raise xml2.dom.IndexSizeErr("offset cannot be negative")
+            raise xml.dom.IndexSizeErr("offset cannot be negative")
         if offset >= len(self.data):
-            raise xml2.dom.IndexSizeErr("offset cannot be beyond end of data")
+            raise xml.dom.IndexSizeErr("offset cannot be beyond end of data")
         if count < 0:
-            raise xml2.dom.IndexSizeErr("count cannot be negative")
+            raise xml.dom.IndexSizeErr("count cannot be negative")
         if count:
             self.data = "%s%s%s" % (
                 self.data[:offset], arg, self.data[offset+count:])
@@ -1006,10 +1063,7 @@ defproperty(CharacterData, "length", doc="Length of the string data.")
 
 
 class Text(CharacterData):
-    # Make sure we don't add an instance __dict__ if we don't already
-    # have one, at least when that's possible:
-    # XXX this does not work, CharacterData is an old-style class
-    # __slots__ = ()
+    __slots__ = ()
 
     nodeType = Node.TEXT_NODE
     nodeName = "#text"
@@ -1017,7 +1071,7 @@ class Text(CharacterData):
 
     def splitText(self, offset):
         if offset < 0 or offset > len(self.data):
-            raise xml2.dom.IndexSizeErr("illegal offset value")
+            raise xml.dom.IndexSizeErr("illegal offset value")
         newText = self.__class__()
         newText.data = self.data[offset:]
         newText.ownerDocument = self.ownerDocument
@@ -1031,7 +1085,7 @@ class Text(CharacterData):
         return newText
 
     def writexml(self, writer, indent="", addindent="", newl=""):
-        _write_data(writer, "%s%s%s"%(indent, self.data, newl))
+        _write_data(writer, "%s%s%s" % (indent, self.data, newl))
 
     # DOM Level 3 (WD 9 April 2002)
 
@@ -1076,9 +1130,7 @@ class Text(CharacterData):
             else:
                 break
         if content:
-            d = self.__dict__
-            d['data'] = content
-            d['nodeValue'] = content
+            self.data = content
             return self
         else:
             return None
@@ -1119,12 +1171,13 @@ def _get_containing_entref(node):
     return None
 
 
-class Comment(Childless, CharacterData):
+class Comment(CharacterData):
     nodeType = Node.COMMENT_NODE
     nodeName = "#comment"
 
     def __init__(self, data):
-        self.data = self.nodeValue = data
+        CharacterData.__init__(self)
+        self._data = data
 
     def writexml(self, writer, indent="", addindent="", newl=""):
         if "--" in self.data:
@@ -1133,10 +1186,7 @@ class Comment(Childless, CharacterData):
 
 
 class CDATASection(Text):
-    # Make sure we don't add an instance __dict__ if we don't already
-    # have one, at least when that's possible:
-    # XXX this does not work, Text is an old-style class
-    # __slots__ = ()
+    __slots__ = ()
 
     nodeType = Node.CDATA_SECTION_NODE
     nodeName = "#cdata-section"
@@ -1176,7 +1226,7 @@ class ReadOnlySequentialNamedNodeMap(object):
         else:
             node = self.getNamedItem(name_or_tuple)
         if node is None:
-            raise KeyError, name_or_tuple
+            raise KeyError(name_or_tuple)
         return node
 
     def item(self, index):
@@ -1188,19 +1238,19 @@ class ReadOnlySequentialNamedNodeMap(object):
             return None
 
     def removeNamedItem(self, name):
-        raise xml2.dom.NoModificationAllowedErr(
+        raise xml.dom.NoModificationAllowedErr(
             "NamedNodeMap instance is read-only")
 
     def removeNamedItemNS(self, namespaceURI, localName):
-        raise xml2.dom.NoModificationAllowedErr(
+        raise xml.dom.NoModificationAllowedErr(
             "NamedNodeMap instance is read-only")
 
     def setNamedItem(self, node):
-        raise xml2.dom.NoModificationAllowedErr(
+        raise xml.dom.NoModificationAllowedErr(
             "NamedNodeMap instance is read-only")
 
     def setNamedItemNS(self, node):
-        raise xml2.dom.NoModificationAllowedErr(
+        raise xml.dom.NoModificationAllowedErr(
             "NamedNodeMap instance is read-only")
 
     def __getstate__(self):
@@ -1216,8 +1266,7 @@ defproperty(ReadOnlySequentialNamedNodeMap, "length",
 class Identified:
     """Mix-in class that supports the publicId and systemId attributes."""
 
-    # XXX this does not work, this is an old-style class
-    # __slots__ = 'publicId', 'systemId'
+    __slots__ = 'publicId', 'systemId'
 
     def _identified_mixin_init(self, publicId, systemId):
         self.publicId = publicId
@@ -1254,7 +1303,7 @@ class DocumentType(Identified, Childless, Node):
             clone = DocumentType(None)
             clone.name = self.name
             clone.nodeName = self.name
-            operation = xml2.dom.UserDataHandler.NODE_CLONED
+            operation = xml.dom.UserDataHandler.NODE_CLONED
             if deep:
                 clone.entities._seq = []
                 clone.notations._seq = []
@@ -1269,7 +1318,7 @@ class DocumentType(Identified, Childless, Node):
                     entity.encoding = e.encoding
                     entity.version = e.version
                     clone.entities._seq.append(entity)
-                    e._call_user_data_handler(operation, n, entity)
+                    e._call_user_data_handler(operation, e, entity)
             self._call_user_data_handler(operation, self, clone)
             return clone
         else:
@@ -1314,19 +1363,19 @@ class Entity(Identified, Node):
         return self.version
 
     def appendChild(self, newChild):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             "cannot append children to an entity node")
 
     def insertBefore(self, newChild, refChild):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             "cannot insert children below an entity node")
 
     def removeChild(self, oldChild):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             "cannot remove children from an entity node")
 
     def replaceChild(self, newChild, oldChild):
-        raise xml2.dom.HierarchyRequestErr(
+        raise xml.dom.HierarchyRequestErr(
             "cannot replace children of an entity node")
 
 class Notation(Identified, Childless, Node):
@@ -1356,7 +1405,7 @@ class DOMImplementation(DOMImplementationLS):
 
     def createDocument(self, namespaceURI, qualifiedName, doctype):
         if doctype and doctype.parentNode is not None:
-            raise xml2.dom.WrongDocumentErr(
+            raise xml.dom.WrongDocumentErr(
                 "doctype object owned by another DOM tree")
         doc = self._create_document()
 
@@ -1377,15 +1426,15 @@ class DOMImplementation(DOMImplementationLS):
             # Null the document is returned without a document element
             # Otherwise if doctype or namespaceURI are not None
             # Then we go back to the above problem
-            raise xml2.dom.InvalidCharacterErr("Element with no name")
+            raise xml.dom.InvalidCharacterErr("Element with no name")
 
         if add_root_element:
             prefix, localname = _nssplit(qualifiedName)
             if prefix == "xml" \
                and namespaceURI != "http://www.w3.org/XML/1998/namespace":
-                raise xml2.dom.NamespaceErr("illegal use of 'xml' prefix")
+                raise xml.dom.NamespaceErr("illegal use of 'xml' prefix")
             if prefix and not namespaceURI:
-                raise xml2.dom.NamespaceErr(
+                raise xml.dom.NamespaceErr(
                     "illegal use of prefix without namespaces")
             element = doc.createElementNS(namespaceURI, qualifiedName)
             if doctype:
@@ -1468,18 +1517,19 @@ def _clear_id_cache(node):
         node.ownerDocument._id_search_stack= None
 
 class Document(Node, DocumentLS):
+    __slots__ = ('_elem_info', 'doctype',
+                 '_id_search_stack', 'childNodes', '_id_cache')
     _child_node_types = (Node.ELEMENT_NODE, Node.PROCESSING_INSTRUCTION_NODE,
                          Node.COMMENT_NODE, Node.DOCUMENT_TYPE_NODE)
 
+    implementation = DOMImplementation()
     nodeType = Node.DOCUMENT_NODE
     nodeName = "#document"
     nodeValue = None
     attributes = None
-    doctype = None
     parentNode = None
     previousSibling = nextSibling = None
 
-    implementation = DOMImplementation()
 
     # Document attributes from Level 3 (WD 9 April 2002)
 
@@ -1494,6 +1544,7 @@ class Document(Node, DocumentLS):
     _magic_id_count = 0
 
     def __init__(self):
+        self.doctype = None
         self.childNodes = NodeList()
         # mapping of (namespaceURI, localName) -> ElementInfo
         #        and tagName -> ElementInfo
@@ -1534,7 +1585,7 @@ class Document(Node, DocumentLS):
 
     def appendChild(self, node):
         if node.nodeType not in self._child_node_types:
-            raise xml2.dom.HierarchyRequestErr(
+            raise xml.dom.HierarchyRequestErr(
                 "%s cannot be child of %s" % (repr(node), repr(self)))
         if node.parentNode is not None:
             # This needs to be done before the next test since this
@@ -1544,7 +1595,7 @@ class Document(Node, DocumentLS):
 
         if node.nodeType == Node.ELEMENT_NODE \
            and self._get_documentElement():
-            raise xml2.dom.HierarchyRequestErr(
+            raise xml.dom.HierarchyRequestErr(
                 "two document elements disallowed")
         return Node.appendChild(self, node)
 
@@ -1552,7 +1603,7 @@ class Document(Node, DocumentLS):
         try:
             self.childNodes.remove(oldChild)
         except ValueError:
-            raise xml2.dom.NotFoundErr()
+            raise xml.dom.NotFoundErr()
         oldChild.nextSibling = oldChild.previousSibling = None
         oldChild.parentNode = None
         if self.documentElement is oldChild:
@@ -1588,7 +1639,7 @@ class Document(Node, DocumentLS):
                 assert clone.doctype is None
                 clone.doctype = childclone
             childclone.parentNode = clone
-        self._call_user_data_handler(xml2.dom.UserDataHandler.NODE_CLONED,
+        self._call_user_data_handler(xml.dom.UserDataHandler.NODE_CLONED,
                                      self, clone)
         return clone
 
@@ -1603,16 +1654,16 @@ class Document(Node, DocumentLS):
         return e
 
     def createTextNode(self, data):
-        if not isinstance(data, StringTypes):
-            raise TypeError, "node contents must be a string"
+        if not isinstance(data, str):
+            raise TypeError("node contents must be a string")
         t = Text()
         t.data = data
         t.ownerDocument = self
         return t
 
     def createCDATASection(self, data):
-        if not isinstance(data, StringTypes):
-            raise TypeError, "node contents must be a string"
+        if not isinstance(data, str):
+            raise TypeError("node contents must be a string")
         c = CDATASection()
         c.data = data
         c.ownerDocument = self
@@ -1730,17 +1781,17 @@ class Document(Node, DocumentLS):
 
     def importNode(self, node, deep):
         if node.nodeType == Node.DOCUMENT_NODE:
-            raise xml2.dom.NotSupportedErr("cannot import document nodes")
+            raise xml.dom.NotSupportedErr("cannot import document nodes")
         elif node.nodeType == Node.DOCUMENT_TYPE_NODE:
-            raise xml2.dom.NotSupportedErr("cannot import document type nodes")
+            raise xml.dom.NotSupportedErr("cannot import document type nodes")
         return _clone_node(node, deep, self)
 
-    def writexml(self, writer, indent="", addindent="", newl="",
-                 encoding = None):
+    def writexml(self, writer, indent="", addindent="", newl="", encoding=None):
         if encoding is None:
             writer.write('<?xml version="1.0" ?>'+newl)
         else:
-            writer.write('<?xml version="1.0" encoding="%s"?>%s' % (encoding, newl))
+            writer.write('<?xml version="1.0" encoding="%s"?>%s' % (
+                encoding, newl))
         for node in self.childNodes:
             node.writexml(writer, indent, addindent, newl)
 
@@ -1748,24 +1799,24 @@ class Document(Node, DocumentLS):
 
     def renameNode(self, n, namespaceURI, name):
         if n.ownerDocument is not self:
-            raise xml2.dom.WrongDocumentErr(
+            raise xml.dom.WrongDocumentErr(
                 "cannot rename nodes from other documents;\n"
                 "expected %s,\nfound %s" % (self, n.ownerDocument))
         if n.nodeType not in (Node.ELEMENT_NODE, Node.ATTRIBUTE_NODE):
-            raise xml2.dom.NotSupportedErr(
+            raise xml.dom.NotSupportedErr(
                 "renameNode() only applies to element and attribute nodes")
         if namespaceURI != EMPTY_NAMESPACE:
             if ':' in name:
                 prefix, localName = name.split(':', 1)
                 if (  prefix == "xmlns"
                       and namespaceURI != xml.dom.XMLNS_NAMESPACE):
-                    raise xml2.dom.NamespaceErr(
+                    raise xml.dom.NamespaceErr(
                         "illegal use of 'xmlns' prefix")
             else:
                 if (  name == "xmlns"
                       and namespaceURI != xml.dom.XMLNS_NAMESPACE
                       and n.nodeType == Node.ATTRIBUTE_NODE):
-                    raise xml2.dom.NamespaceErr(
+                    raise xml.dom.NamespaceErr(
                         "illegal use of the 'xmlns' attribute")
                 prefix = None
                 localName = name
@@ -1779,17 +1830,15 @@ class Document(Node, DocumentLS):
                 element.removeAttributeNode(n)
         else:
             element = None
-        # avoid __setattr__
-        d = n.__dict__
-        d['prefix'] = prefix
-        d['localName'] = localName
-        d['namespaceURI'] = namespaceURI
-        d['nodeName'] = name
+        n.prefix = prefix
+        n._localName = localName
+        n.namespaceURI = namespaceURI
+        n.nodeName = name
         if n.nodeType == Node.ELEMENT_NODE:
-            d['tagName'] = name
+            n.tagName = name
         else:
             # attribute node
-            d['name'] = name
+            n.name = name
             if element is not None:
                 element.setAttributeNode(n)
                 if is_id:
@@ -1872,12 +1921,12 @@ def _clone_node(node, deep, newOwnerDocument):
                 entity.ownerDocument = newOwnerDocument
                 clone.entities._seq.append(entity)
                 if hasattr(e, '_call_user_data_handler'):
-                    e._call_user_data_handler(operation, n, entity)
+                    e._call_user_data_handler(operation, e, entity)
     else:
         # Note the cloning of Document and DocumentType nodes is
         # implementation specific.  minidom handles those cases
         # directly in the cloneNode() methods.
-        raise xml2.dom.NotSupportedErr("Cannot clone node %s" % repr(node))
+        raise xml.dom.NotSupportedErr("Cannot clone node %s" % repr(node))
 
     # Check for _call_user_data_handler() since this could conceivably
     # used with other DOM implementations (one of the FourThought
@@ -1895,11 +1944,6 @@ def _nssplit(qualifiedName):
         return (None, fields[0])
 
 
-def _get_StringIO():
-    # we can't use cStringIO since it doesn't support Unicode strings
-    from StringIO import StringIO
-    return StringIO()
-
 def _do_pulldom_parse(func, args, kwargs):
     events = func(*args, **kwargs)
     toktype, rootNode = events.getEvent()
@@ -1910,26 +1954,26 @@ def _do_pulldom_parse(func, args, kwargs):
 def parse(file, parser=None, bufsize=None):
     """Parse a file into a DOM by filename or file object."""
     if parser is None and not bufsize:
-        from xml2.dom import expatbuilder
+        from xml.dom import expatbuilder
         return expatbuilder.parse(file)
     else:
-        from xml2.dom import pulldom
+        from xml.dom import pulldom
         return _do_pulldom_parse(pulldom.parse, (file,),
             {'parser': parser, 'bufsize': bufsize})
 
 def parseString(string, parser=None):
     """Parse a file into a DOM from a string."""
     if parser is None:
-        from xml2.dom import expatbuilder
+        from xml.dom import expatbuilder
         return expatbuilder.parseString(string)
     else:
-        from xml2.dom import pulldom
+        from xml.dom import pulldom
         return _do_pulldom_parse(pulldom.parseString, (string,),
                                  {'parser': parser})
 
 def getDOMImplementation(features=None):
     if features:
-        if isinstance(features, StringTypes):
+        if isinstance(features, str):
             features = domreg._parse_feature_string(features)
         for f, v in features:
             if not Document.implementation.hasFeature(f, v):

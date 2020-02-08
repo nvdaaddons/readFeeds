@@ -1,9 +1,10 @@
 """Implementation of the DOM Level 3 'LS-Load' feature."""
 
 import copy
-import xml2.dom
+import warnings
+import xml.dom
 
-from xml2.dom.NodeFilter import NodeFilter
+from xml.dom.NodeFilter import NodeFilter
 
 
 __all__ = ["DOMBuilder", "DOMEntityResolver", "DOMInputSource"]
@@ -78,13 +79,13 @@ class DOMBuilder:
             try:
                 settings = self._settings[(_name_xform(name), state)]
             except KeyError:
-                raise xml2dom.NotSupportedErr(
-                    "unsupported feature: %r" % (name,))
+                raise xml.dom.NotSupportedErr(
+                    "unsupported feature: %r" % (name,)) from None
             else:
                 for name, value in settings:
                     setattr(self._options, name, value)
         else:
-            raise xml2dom.NotFoundErr("unknown feature: " + repr(name))
+            raise xml.dom.NotFoundErr("unknown feature: " + repr(name))
 
     def supportsFeature(self, name):
         return hasattr(self._options, _name_xform(name))
@@ -175,7 +176,7 @@ class DOMBuilder:
                                  or options.create_entity_ref_nodes
                                  or options.entities
                                  or options.cdata_sections))
-            raise xml2dom.NotFoundErr("feature %s not known" % repr(name))
+            raise xml.dom.NotFoundErr("feature %s not known" % repr(name))
 
     def parseURI(self, uri):
         if self.entityResolver:
@@ -190,8 +191,8 @@ class DOMBuilder:
         options.errorHandler = self.errorHandler
         fp = input.byteStream
         if fp is None and options.systemId:
-            import urllib2
-            fp = urllib2.urlopen(input.systemId)
+            import urllib.request
+            fp = urllib.request.urlopen(input.systemId)
         return self._parse_bytestream(fp, options)
 
     def parseWithContext(self, input, cnode, action):
@@ -200,8 +201,8 @@ class DOMBuilder:
         raise NotImplementedError("Haven't written this yet...")
 
     def _parse_bytestream(self, stream, options):
-        import xml2dom.expatbuilder
-        builder = xml2dom.expatbuilder.makeBuilder(options)
+        import xml.dom.expatbuilder
+        builder = xml.dom.expatbuilder.makeBuilder(options)
         return builder.parseFile(stream)
 
 
@@ -223,14 +224,14 @@ class DOMEntityResolver(object):
         source.encoding = self._guess_media_encoding(source)
 
         # determine the base URI is we can
-        import posixpath, urlparse
-        parts = urlparse.urlparse(systemId)
+        import posixpath, urllib.parse
+        parts = urllib.parse.urlparse(systemId)
         scheme, netloc, path, params, query, fragment = parts
         # XXX should we check the scheme here as well?
         if path and not path.endswith("/"):
             path = posixpath.dirname(path) + "/"
             parts = scheme, netloc, path, params, query, fragment
-            source.baseURI = urlparse.urlunparse(parts)
+            source.baseURI = urllib.parse.urlunparse(parts)
 
         return source
 
@@ -242,8 +243,8 @@ class DOMEntityResolver(object):
             return self._opener
 
     def _create_opener(self):
-        import urllib2
-        return urllib2.build_opener()
+        import urllib.request
+        return urllib.request.build_opener()
 
     def _guess_media_encoding(self, source):
         info = source.byteStream.info()
@@ -334,13 +335,14 @@ del NodeFilter
 class DocumentLS:
     """Mixin to create documents that conform to the load/save spec."""
 
-    async = False
+    async_ = False
 
     def _get_async(self):
         return False
-    def _set_async(self, async):
-        if async:
-            raise xml2dom.NotSupportedErr(
+
+    def _set_async(self, flag):
+        if flag:
+            raise xml.dom.NotSupportedErr(
                 "asynchronous document loading is not supported")
 
     def abort(self):
@@ -359,7 +361,7 @@ class DocumentLS:
         if snode is None:
             snode = self
         elif snode.ownerDocument is not self:
-            raise xml2dom.WrongDocumentErr()
+            raise xml.dom.WrongDocumentErr()
         return snode.toxml()
 
 
@@ -369,12 +371,12 @@ class DOMImplementationLS:
 
     def createDOMBuilder(self, mode, schemaType):
         if schemaType is not None:
-            raise xml2dom.NotSupportedErr(
+            raise xml.dom.NotSupportedErr(
                 "schemaType not yet supported")
         if mode == self.MODE_SYNCHRONOUS:
             return DOMBuilder()
         if mode == self.MODE_ASYNCHRONOUS:
-            raise xml2dom.NotSupportedErr(
+            raise xml.dom.NotSupportedErr(
                 "asynchronous builders are not supported")
         raise ValueError("unknown value for mode")
 
