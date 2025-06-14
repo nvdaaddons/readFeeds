@@ -19,7 +19,7 @@ addon_info = {
 	# Translators: Long description to be shown for this add-on on add-on information from add-ons manager
 	"addon_description": _("""Add-on for using NVDA as a feed reader."""),
 	# version
-	"addon_version": "38.0.0",
+	"addon_version": "38.2.0",
 	# Author(s)
 	"addon_author": u"Noelia Ruiz Martínez <nrm1977@gmail.com>, Mesar Hameed <mesar.hameed@gmail.com>",
 	# URL for the add-on documentation support
@@ -27,9 +27,9 @@ addon_info = {
 	# Documentation file name
 	"addon_docFileName": "readme.html",
 	# Minimum NVDA version supported (e.g. "2018.3")
-	"addon_minimumNVDAVersion": "2024.1.0",
+	"addon_minimumNVDAVersion": "2025.1",
 	# Last NVDA version supported/tested (e.g. "2018.4", ideally more recent than minimum version)
-	"addon_lastTestedNVDAVersion": "2024.4",
+	"addon_lastTestedNVDAVersion": "2025.1",
 	# Add-on update channel (default is stable or None)
 	"addon_updateChannel": None,
 }
